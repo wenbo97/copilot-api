@@ -351,3 +351,21 @@ bun run start
 - If you have a GitHub business or enterprise plan account with Copilot, use the `--account-type` flag (e.g., `--account-type business`). See the [official documentation](https://docs.github.com/en/enterprise-cloud@latest/copilot/managing-copilot/managing-github-copilot-in-your-organization/managing-access-to-github-copilot-in-your-organization/managing-github-copilot-access-to-your-organizations-network#configuring-copilot-subscription-based-network-routing-for-your-enterprise-or-organization) for more details.
 
 ## Trace
+
+## Enable VS Code Claude Extension
+
+- Copy [settings.json](/settings.json) to `C:/Users/<user-name>/.claude/settings.json`  
+  (Create the file if it does not already exist.)
+- Restart the VS Code Claude extension  
+  (Close the current Claude chat and reopen it.)
+
+### Optional: Lightweight Windows Terminal startup
+
+- Copy the full path of `start-claude.cmd`.
+- Add it to Windows Terminal:
+  1. Open Windows Terminal.
+  2. Go to **Settings → Add a new profile → New empty profile**.
+  3. Enter a clear name and paste the script path into the **Command line** field.
+  4. Save the profile and open it from the dropdown list.
+  5. Configure `start-copilot-api.cmd` using the same steps.
+- You can now start the Copilot API and Claude scripts directly from Windows Terminal.
