@@ -16,4 +16,6 @@ if not exist "c:\src\controlplane" mkdir "c:\src\controlplane"
 pushd "c:\src\controlplane"
 ECHO === Claude starting ===
 ECHO === (Ctrl+C to stop Claude only) ===
-cmd /k claude
+call claude
+
+ECHO end.
