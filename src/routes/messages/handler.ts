@@ -31,10 +31,12 @@ export async function handleCompletion(c: Context) {
   consola.debug("Anthropic request payload:", JSON.stringify(anthropicPayload))
 
   // Apply model mapping if configured
+  const originalModel = anthropicPayload.model
   const mappings = getModelMappings()
   if (mappings.size > 0) {
     const { model, mapped } = applyModelMapping(anthropicPayload.model, mappings, state.verbose)
     if (mapped) {
+      consola.info(`[Anthropic] Model mapping: "${originalModel}" -> "${model}"`)
       anthropicPayload = { ...anthropicPayload, model }
     }
   }
@@ -46,6 +48,8 @@ export async function handleCompletion(c: Context) {
   })
 
   const openAIPayload = translateToOpenAI(anthropicPayload)
+  consola.info(`[Anthropic] Using model: "${anthropicPayload.model}" -> translated to: "${openAIPayload.model}"`)
+
   consola.debug(
     "Translated OpenAI request payload:",
     JSON.stringify(openAIPayload),

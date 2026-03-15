@@ -1,14 +1,21 @@
 @ECHO OFF
 set ANTHROPIC_BASE_URL=http://localhost:4141
-set ANTHROPIC_AUTH_TOKEN=dummy-key
-set ANTHROPIC_API_KEY=dummy-key
-set ANTHROPIC_MODEL=claude-opus-4.5
-set ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-4.5
-set ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4.5
-set ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4.5
+set ANTHROPIC_AUTH_TOKEN=dummy
+set ANTHROPIC_MODEL=claude-opus-4-6
+set ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-4-6
+set ANTHROPIC_SMALL_FAST_MODEL=claude-sonnet-4-6
+set ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5
+set CLAUDE_CODE_SUBAGENT_MODEL=claude-opus-4-6
 set CLAUDE_CODE_ATTRIBUTION_HEADER=0
-if not exist "c:/src/controlplane" mkdir "c:/src/controlplane"
-pushd c:/src/controlplane
+set CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1
+set CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=90
+set CLAUDE_CODE_EFFORT_LEVEL=high
+
+if not exist "c:\src\controlplane" mkdir "c:\src\controlplane"
+pushd "c:\src\controlplane"
 ECHO === Claude starting ===
 ECHO === (Ctrl+C to stop Claude only) ===
-cmd /k claude
+@REM call claude --dangerously-skip-permissions
+call claude --allow-dangerously-skip-permissions
+ECHO end.
+popd

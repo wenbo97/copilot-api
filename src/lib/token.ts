@@ -37,7 +37,21 @@ export const setupCopilotToken = async () => {
       }
     } catch (error) {
       consola.error("Failed to refresh Copilot token:", error)
-      throw error
+
+      if (error instanceof HTTPError && error.response.status === 401) {
+        consola.warn("GitHub token may have expired, attempting re-authentication...")
+        try {
+          await setupGitHubToken({ force: true })
+          const { token } = await getCopilotToken()
+          state.copilotToken = token
+          consola.success("Re-authentication successful, Copilot token refreshed")
+        } catch (reAuthError) {
+          consola.error("Re-authentication also failed:", reAuthError)
+          consola.warn("Service will continue with stale token. Run re-auth.cmd manually if needed.")
+        }
+      } else {
+        consola.warn("Will retry on next refresh interval. Current token may still be valid.")
+      }
     }
   }, refreshInterval)
 }

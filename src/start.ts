@@ -7,6 +7,7 @@ import path from "node:path"
 import { serve, type ServerHandler } from "srvx"
 import invariant from "tiny-invariant"
 
+import { getModelMappings } from "./lib/model-mapping"
 import { ensurePaths } from "./lib/paths"
 import { initProxyFromEnv } from "./lib/proxy"
 import { generateEnvScript } from "./lib/shell"
@@ -80,6 +81,14 @@ export async function runServer(options: RunServerOptions): Promise<void> {
   consola.info(
     `Available models: \n${state.models?.data.map((model) => `- ${model.id}`).join("\n")}`,
   )
+
+  const mappings = getModelMappings()
+  if (mappings.size > 0) {
+    const mappingLines = Array.from(mappings.entries())
+      .map(([source, target]) => `  ${source} -> ${target}`)
+      .join("\n")
+    consola.info(`Model mappings:\n${mappingLines}`)
+  }
 
   const serverUrl = `http://localhost:${options.port}`
 
