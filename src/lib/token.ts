@@ -58,9 +58,7 @@ async function refreshCopilotToken(): Promise<void> {
         await setupGitHubToken({ force: true })
         const { token, refresh_in, expires_at } = await getCopilotToken()
         applyCopilotToken(token, expires_at)
-        consola.success(
-          "Re-authentication successful, Copilot token refreshed",
-        )
+        consola.success("Re-authentication successful, Copilot token refreshed")
         scheduleRefresh(refresh_in)
       } catch (reAuthError) {
         consola.error("Re-authentication also failed:", reAuthError)
