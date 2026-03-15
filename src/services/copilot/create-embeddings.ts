@@ -1,8 +1,10 @@
 import { copilotHeaders, copilotBaseUrl } from "~/lib/api-config"
 import { HTTPError } from "~/lib/error"
 import { state } from "~/lib/state"
+import { ensureCopilotToken } from "~/lib/token"
 
 export const createEmbeddings = async (payload: EmbeddingRequest) => {
+  await ensureCopilotToken()
   if (!state.copilotToken) throw new Error("Copilot token not found")
 
   const response = await fetch(`${copilotBaseUrl(state)}/embeddings`, {

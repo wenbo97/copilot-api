@@ -3,6 +3,7 @@ import type { ModelsResponse } from "~/services/copilot/get-models"
 export interface State {
   githubToken?: string
   copilotToken?: string
+  copilotTokenExpiresAt?: number // Unix timestamp (seconds) when copilot token expires
 
   accountType: string
   models?: ModelsResponse
