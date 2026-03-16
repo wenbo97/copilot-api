@@ -51,6 +51,19 @@ async function refreshCopilotToken(): Promise<void> {
     consola.error("Failed to refresh Copilot token:", error)
 
     if (error instanceof HTTPError && error.response.status === 401) {
+      // Retry once before escalating — the Copilot token endpoint can 401
+      // transiently even when the GitHub token is still valid.
+      consola.warn("Got 401 from Copilot token endpoint, retrying once...")
+      try {
+        const { token, refresh_in, expires_at } = await getCopilotToken()
+        applyCopilotToken(token, expires_at)
+        consola.success("Copilot token refreshed on retry")
+        scheduleRefresh(refresh_in)
+        return
+      } catch {
+        // Retry failed — now check if the GitHub token itself is bad
+      }
+
       consola.warn(
         "GitHub token may have expired, attempting re-authentication...",
       )
@@ -135,6 +148,26 @@ export async function setupGitHubToken(
       await logUser()
 
       return
+    }
+
+    // When force=true, validate the existing token before starting device code flow.
+    // The Copilot token endpoint may return 401 transiently — that doesn't mean
+    // the GitHub token itself is invalid.
+    if (githubToken && options?.force) {
+      state.githubToken = githubToken
+      try {
+        await logUser() // calls /user — validates the GitHub token
+        consola.info("Existing GitHub token is still valid, reusing it")
+        if (state.showToken) {
+          consola.info("GitHub token:", githubToken)
+        }
+        return
+      } catch (validationError) {
+        consola.warn(
+          "Existing GitHub token failed validation, requesting new one",
+        )
+        // Fall through to device code flow below
+      }
     }
 
     consola.info("Not logged in, getting new access token")
