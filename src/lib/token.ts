@@ -162,7 +162,7 @@ export async function setupGitHubToken(
           consola.info("GitHub token:", githubToken)
         }
         return
-      } catch (validationError) {
+      } catch {
         consola.warn(
           "Existing GitHub token failed validation, requesting new one",
         )

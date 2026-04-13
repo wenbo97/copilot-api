@@ -41,7 +41,8 @@ export async function pollAccessToken(
     const json = await response.json()
     consola.debug("Polling access token response:", json)
 
-    const { access_token } = json as AccessTokenResponse
+    const githubAccessToken = json as AccessTokenResponse
+    const { access_token } = githubAccessToken
 
     if (access_token) {
       return access_token

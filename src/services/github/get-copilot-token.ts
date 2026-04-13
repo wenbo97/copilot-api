@@ -12,7 +12,8 @@ export const getCopilotToken = async () => {
 
   if (!response.ok) throw new HTTPError("Failed to get Copilot token", response)
 
-  return (await response.json()) as GetCopilotTokenResponse
+  const copilotTokenResponse = (await response.json()) as GetCopilotTokenResponse
+  return copilotTokenResponse
 }
 
 // Trimmed for the sake of simplicity
