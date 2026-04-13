@@ -65,20 +65,29 @@ async function refreshCopilotToken(): Promise<void> {
       }
 
       consola.warn(
-        "GitHub token may have expired, attempting re-authentication...",
+        "Copilot token refresh returned 401, re-reading GitHub token from disk...",
       )
       try {
-        await setupGitHubToken({ force: true })
+        // Re-read the ghu_ token from disk — it may have been refreshed
+        // externally (e.g. via re-auth.cmd). No interactive auth needed.
+        const githubToken = await readGithubToken()
+        if (githubToken) {
+          // eslint-disable-next-line require-atomic-updates -- intentional overwrite with fresh disk value
+          state.githubToken = githubToken
+          consola.debug(
+            "GitHub token re-read from disk, retrying copilot token fetch",
+          )
+        }
         const { token, refresh_in, expires_at } = await getCopilotToken()
         applyCopilotToken(token, expires_at)
-        consola.success("Re-authentication successful, Copilot token refreshed")
+        consola.success("Copilot token refreshed after re-reading GitHub token")
         scheduleRefresh(refresh_in)
-      } catch (reAuthError) {
-        consola.error("Re-authentication also failed:", reAuthError)
+      } catch (retryError) {
+        consola.error("Retry with disk token also failed:", retryError)
         consola.warn(
-          "Service will continue with stale token. Run re-auth.cmd manually if needed.",
+          "GitHub token may be invalid. Run re-auth.cmd manually to re-authenticate.",
         )
-        // Retry in 60s so we don't give up permanently
+        // Retry in 120s so we don't give up permanently
         scheduleRefresh(120)
       }
     } else {
