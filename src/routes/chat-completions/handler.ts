@@ -26,14 +26,17 @@ export async function handleCompletion(c: Context) {
   const originalModel = payload.model
   const mappings = getModelMappings()
   if (mappings.size > 0) {
-    const { model, mapped } = applyModelMapping(payload.model, mappings, state.verbose)
+    const { model, mapped } = applyModelMapping(
+      payload.model,
+      mappings,
+      state.verbose,
+    )
     if (mapped) {
       consola.info(`[OpenAI] Model mapping: "${originalModel}" -> "${model}"`)
       payload = { ...payload, model }
     }
   }
   consola.info(`[OpenAI] Using model: "${payload.model}"`)
-
 
   // Trace the request
   const traceTimestamp = await traceRequest(payload)

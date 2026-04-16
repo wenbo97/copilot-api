@@ -14,58 +14,52 @@ import {
   type ChatCompletionResponse,
 } from "~/services/copilot/create-chat-completions"
 
-import {
-  type AnthropicMessagesPayload,
-  type AnthropicStreamState,
-} from "./anthropic-types"
-import {
-  translateToAnthropic,
-  translateToOpenAI,
-} from "./non-stream-translation"
-import { translateChunkToAnthropicEvents } from "./stream-translation"
+import type { ResponsesPayload, ResponseStreamState } from "./responses-types"
 
-export async function handleCompletion(c: Context) {
+import {
+  translateToOpenAI,
+  translateToResponses,
+} from "./non-stream-translation"
+import { translateChunkToResponseEvents } from "./stream-translation"
+
+export async function handleResponses(c: Context) {
   await checkRateLimit(state)
 
-  let anthropicPayload = await c.req.json<AnthropicMessagesPayload>()
-  consola.debug("Anthropic request payload:", JSON.stringify(anthropicPayload))
+  let payload = await c.req.json<ResponsesPayload>()
+  consola.debug(
+    "Responses API request payload:",
+    JSON.stringify(payload).slice(-400),
+  )
 
   // Apply model mapping if configured
-  const originalModel = anthropicPayload.model
+  const originalModel = payload.model
   const mappings = getModelMappings()
   if (mappings.size > 0) {
     const { model, mapped } = applyModelMapping(
-      anthropicPayload.model,
+      payload.model,
       mappings,
       state.verbose,
     )
     if (mapped) {
       consola.info(
-        `[Anthropic] Model mapping: "${originalModel}" -> "${model}"`,
+        `[Responses] Model mapping: "${originalModel}" -> "${model}"`,
       )
-      anthropicPayload = { ...anthropicPayload, model }
+      payload = { ...payload, model }
     }
   }
-
-  // Trace the original Anthropic request
+  consola.info(`[Responses] Using model: "${payload.model}"`)
   const traceTimestamp = await traceRequest({
-    type: "anthropic",
-    original: anthropicPayload,
+    type: "responses",
+    original: payload,
   })
 
-  const openAIPayload = translateToOpenAI(anthropicPayload)
-  consola.info(
-    `[Anthropic] Using model: "${anthropicPayload.model}" -> translated to: "${openAIPayload.model}"`,
-  )
-
+  const openAIPayload = translateToOpenAI(payload)
   consola.debug(
     "Translated OpenAI request payload:",
     JSON.stringify(openAIPayload),
   )
 
-  if (state.manualApprove) {
-    await awaitApproval()
-  }
+  if (state.manualApprove) await awaitApproval()
 
   const response = await createChatCompletions(openAIPayload)
 
@@ -74,29 +68,23 @@ export async function handleCompletion(c: Context) {
       "Non-streaming response from Copilot:",
       JSON.stringify(response).slice(-400),
     )
-    const anthropicResponse = translateToAnthropic(response)
-    consola.debug(
-      "Translated Anthropic response:",
-      JSON.stringify(anthropicResponse),
-    )
-    // Trace the response (both OpenAI and translated Anthropic)
+    const responsesResponse = translateToResponses(response)
     await traceResponse(
-      {
-        type: "anthropic",
-        openai: response,
-        translated: anthropicResponse,
-      },
+      { type: "responses", openai: response, translated: responsesResponse },
       traceTimestamp,
     )
-    return c.json(anthropicResponse)
+    return c.json(responsesResponse)
   }
 
+  // Streaming — Responses API uses plain SSE with `type` field in data, not `event:` field
   consola.debug("Streaming response from Copilot")
   return streamSSE(c, async (stream) => {
-    const streamState: AnthropicStreamState = {
-      messageStartSent: false,
-      contentBlockIndex: 0,
-      contentBlockOpen: false,
+    const streamState: ResponseStreamState = {
+      responseId: "",
+      model: payload.model,
+      outputItemIndex: 0,
+      contentPartIndex: 0,
+      messageStarted: false,
       toolCalls: {},
     }
 
@@ -104,20 +92,15 @@ export async function handleCompletion(c: Context) {
 
     for await (const rawEvent of response) {
       consola.debug("Copilot raw stream event:", JSON.stringify(rawEvent))
-      if (rawEvent.data === "[DONE]") {
-        break
-      }
-
-      if (!rawEvent.data) {
-        continue
-      }
+      if (rawEvent.data === "[DONE]") break
+      if (!rawEvent.data) continue
 
       const chunk = JSON.parse(rawEvent.data) as ChatCompletionChunk
-      const events = translateChunkToAnthropicEvents(chunk, streamState)
+      const events = translateChunkToResponseEvents(chunk, streamState)
 
       for (const event of events) {
-        consola.debug("Translated Anthropic event:", JSON.stringify(event))
-        streamTracer.addChunk({ openai: chunk, anthropic: event })
+        consola.debug("Translated Responses event:", JSON.stringify(event))
+        streamTracer.addChunk({ openai: chunk, responses: event })
         await stream.writeSSE({
           event: event.type,
           data: JSON.stringify(event),

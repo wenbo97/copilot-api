@@ -64,7 +64,7 @@ export async function runServer(options: RunServerOptions): Promise<void> {
     consola.info(`Tracing enabled. Logs will be saved to: ${state.traceFolder}`)
     await ensureTraceFolder()
   }
-  
+
   await ensurePaths()
   await cacheVSCodeVersion()
 
