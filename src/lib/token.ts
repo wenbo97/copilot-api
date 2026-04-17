@@ -32,8 +32,16 @@ function scheduleRefresh(refresh_in: number) {
   const delayMs = Math.max((refresh_in - 60) * 1000, 30_000)
   consola.debug(`Next copilot token refresh in ${Math.round(delayMs / 1000)}s`)
 
-  refreshTimer = setTimeout(async () => {
-    await refreshCopilotToken()
+  refreshTimer = setTimeout(() => {
+    if (!refreshPromise) {
+      refreshPromise = refreshCopilotToken().finally(() => {
+        refreshPromise = null
+      })
+    }
+    refreshPromise.catch((err: unknown) => {
+      consola.error("Unhandled error in background token refresh:", err)
+      scheduleRefresh(120)
+    })
   }, delayMs)
 }
 
@@ -105,13 +113,15 @@ async function refreshCopilotToken(): Promise<void> {
  * If the token is expired or about to expire (within 60s), refresh it on-demand.
  * Multiple concurrent callers share a single refresh attempt.
  */
-export async function ensureCopilotToken(): Promise<void> {
-  const now = Math.floor(Date.now() / 1000)
-  const expiresAt = state.copilotTokenExpiresAt ?? 0
+export async function ensureCopilotToken(force = false): Promise<void> {
+  if (!force) {
+    const now = Math.floor(Date.now() / 1000)
+    const expiresAt = state.copilotTokenExpiresAt ?? 0
 
-  // Token still valid for at least 60s — nothing to do
-  if (state.copilotToken && expiresAt - now > 60) {
-    return
+    // Token still valid for at least 60s — nothing to do
+    if (state.copilotToken && expiresAt - now > 60) {
+      return
+    }
   }
 
   consola.warn("Copilot token expired or expiring soon, refreshing on-demand")

@@ -37,6 +37,24 @@ export const createChatCompletions = async (
   })
 
   if (!response.ok) {
+    if (response.status === 401) {
+      consola.warn("Got 401 from completions endpoint, refreshing token and retrying")
+      await ensureCopilotToken(true)
+      const retryResponse = await fetch(`${copilotBaseUrl(state)}/chat/completions`, {
+        method: "POST",
+        headers: {
+          ...copilotHeaders(state, enableVision),
+          "X-Initiator": isAgentCall ? "agent" : "user",
+        },
+        body: JSON.stringify(payload),
+      })
+      if (!retryResponse.ok) {
+        consola.error("Retry after token refresh also failed", retryResponse)
+        throw new HTTPError("Failed to create chat completions", retryResponse)
+      }
+      if (payload.stream) return events(retryResponse)
+      return (await retryResponse.json()) as ChatCompletionResponse
+    }
     consola.error("Failed to create chat completions", response)
     throw new HTTPError("Failed to create chat completions", response)
   }
