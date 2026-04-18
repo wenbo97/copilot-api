@@ -1,34 +1,10 @@
-import consola from "consola"
-
-import { copilotHeaders, copilotBaseUrl } from "~/lib/api-config"
-import { HTTPError } from "~/lib/error"
-import { state } from "~/lib/state"
-import { ensureCopilotToken } from "~/lib/token"
+import { copilotFetch } from "./copilot-fetch"
 
 export const createEmbeddings = async (payload: EmbeddingRequest) => {
-  await ensureCopilotToken()
-  if (!state.copilotToken) throw new Error("Copilot token not found")
-
-  const response = await fetch(`${copilotBaseUrl(state)}/embeddings`, {
+  const response = await copilotFetch("/embeddings", {
     method: "POST",
-    headers: copilotHeaders(state),
     body: JSON.stringify(payload),
   })
-
-  if (!response.ok) {
-    if (response.status === 401) {
-      consola.warn("Got 401 from embeddings endpoint, refreshing token and retrying")
-      await ensureCopilotToken(true)
-      const retryResponse = await fetch(`${copilotBaseUrl(state)}/embeddings`, {
-        method: "POST",
-        headers: copilotHeaders(state),
-        body: JSON.stringify(payload),
-      })
-      if (!retryResponse.ok) throw new HTTPError("Failed to create embeddings", retryResponse)
-      return (await retryResponse.json()) as EmbeddingResponse
-    }
-    throw new HTTPError("Failed to create embeddings", response)
-  }
 
   return (await response.json()) as EmbeddingResponse
 }

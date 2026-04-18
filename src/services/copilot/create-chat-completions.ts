@@ -1,63 +1,32 @@
-import consola from "consola"
 import { events } from "fetch-event-stream"
 
-import { copilotHeaders, copilotBaseUrl } from "~/lib/api-config"
-import { HTTPError } from "~/lib/error"
 import { state } from "~/lib/state"
-import { ensureCopilotToken } from "~/lib/token"
+
+import { copilotFetch } from "./copilot-fetch"
 
 export const createChatCompletions = async (
   payload: ChatCompletionsPayload,
 ) => {
-  await ensureCopilotToken()
-  if (!state.copilotToken) throw new Error("Copilot token not found")
-
   const enableVision = payload.messages.some(
     (x) =>
       typeof x.content !== "string"
       && x.content?.some((x) => x.type === "image_url"),
   )
 
-  // Agent/user check for X-Initiator header
-  // Determine if any message is from an agent ("assistant" or "tool")
   const isAgentCall = payload.messages.some((msg) =>
     ["assistant", "tool"].includes(msg.role),
   )
 
-  // Build headers and add X-Initiator
-  const headers: Record<string, string> = {
-    ...copilotHeaders(state, enableVision),
+  const extraHeaders: Record<string, string> = {
     "X-Initiator": isAgentCall ? "agent" : "user",
   }
+  if (enableVision) extraHeaders["copilot-vision-request"] = "true"
 
-  const response = await fetch(`${copilotBaseUrl(state)}/chat/completions`, {
+  const response = await copilotFetch("/chat/completions", {
     method: "POST",
-    headers,
     body: JSON.stringify(payload),
+    extraHeaders,
   })
-
-  if (!response.ok) {
-    if (response.status === 401) {
-      consola.warn("Got 401 from completions endpoint, refreshing token and retrying")
-      await ensureCopilotToken(true)
-      const retryResponse = await fetch(`${copilotBaseUrl(state)}/chat/completions`, {
-        method: "POST",
-        headers: {
-          ...copilotHeaders(state, enableVision),
-          "X-Initiator": isAgentCall ? "agent" : "user",
-        },
-        body: JSON.stringify(payload),
-      })
-      if (!retryResponse.ok) {
-        consola.error("Retry after token refresh also failed", retryResponse)
-        throw new HTTPError("Failed to create chat completions", retryResponse)
-      }
-      if (payload.stream) return events(retryResponse)
-      return (await retryResponse.json()) as ChatCompletionResponse
-    }
-    consola.error("Failed to create chat completions", response)
-    throw new HTTPError("Failed to create chat completions", response)
-  }
 
   if (payload.stream) {
     return events(response)

@@ -9,6 +9,7 @@ import { pollAccessToken } from "~/services/github/poll-access-token"
 
 import { HTTPError } from "./error"
 import { state } from "./state"
+import { sleep } from "./utils"
 
 const readGithubToken = () => fs.readFile(PATHS.GITHUB_TOKEN_PATH, "utf8")
 
@@ -20,16 +21,39 @@ let refreshTimer: ReturnType<typeof setTimeout> | null = null
 // If a refresh is already in progress, subsequent callers share the same promise
 let refreshPromise: Promise<void> | null = null
 
+// Track consecutive failures for exponential backoff
+let consecutiveFailures = 0
+const MAX_RETRY_DELAY_S = 600 // 10 minutes max backoff
+const MIN_RETRY_DELAY_S = 15
+
 function applyCopilotToken(token: string, expires_at: number) {
   state.copilotToken = token
   state.copilotTokenExpiresAt = expires_at
+  consecutiveFailures = 0
+}
+
+function getRetryDelay(): number {
+  // Exponential backoff: 15s, 30s, 60s, 120s, 240s, 600s (capped)
+  const delay = Math.min(
+    MIN_RETRY_DELAY_S * Math.pow(2, consecutiveFailures),
+    MAX_RETRY_DELAY_S,
+  )
+  return delay
 }
 
 function scheduleRefresh(refresh_in: number) {
   if (refreshTimer) clearTimeout(refreshTimer)
 
-  // Refresh 60s before the suggested time, minimum 30s
-  const delayMs = Math.max((refresh_in - 60) * 1000, 30_000)
+  // Use the EARLIER of: (refresh_in - 60s) or (expires_at - now - 60s)
+  // This ensures we refresh before the token actually expires
+  const now = Math.floor(Date.now() / 1000)
+  const expiresAt = state.copilotTokenExpiresAt ?? 0
+  const timeUntilExpiry = expiresAt - now
+
+  const delayFromRefreshIn = Math.max((refresh_in - 60) * 1000, 30_000)
+  const delayFromExpiry = Math.max((timeUntilExpiry - 60) * 1000, 30_000)
+  const delayMs = Math.min(delayFromRefreshIn, delayFromExpiry)
+
   consola.debug(`Next copilot token refresh in ${Math.round(delayMs / 1000)}s`)
 
   refreshTimer = setTimeout(() => {
@@ -40,91 +64,142 @@ function scheduleRefresh(refresh_in: number) {
     }
     refreshPromise.catch((err: unknown) => {
       consola.error("Unhandled error in background token refresh:", err)
-      scheduleRefresh(120)
     })
   }, delayMs)
 }
 
+async function fetchCopilotTokenWithRetry(): Promise<{
+  token: string
+  refresh_in: number
+  expires_at: number
+}> {
+  // Try up to 3 times with short delays for transient failures
+  const maxAttempts = 3
+  let lastError: unknown
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await getCopilotToken()
+    } catch (error) {
+      lastError = error
+      const is401 = error instanceof HTTPError && error.response.status === 401
+
+      if (attempt < maxAttempts) {
+        // Short delay between retries (1s, 2s) for transient issues
+        const retryMs = attempt * 1000
+        consola.warn(
+          `Copilot token fetch attempt ${attempt}/${maxAttempts} failed` +
+            `${is401 ? " (401)" : ""}, retrying in ${retryMs}ms...`,
+        )
+        await sleep(retryMs)
+      }
+    }
+  }
+
+  throw lastError
+}
+
 async function refreshCopilotToken(): Promise<void> {
   consola.debug("Refreshing Copilot token")
+
+  // Attempt 1: fetch with built-in retries using current GitHub token
   try {
-    const { token, refresh_in, expires_at } = await getCopilotToken()
+    const { token, refresh_in, expires_at } = await fetchCopilotTokenWithRetry()
     applyCopilotToken(token, expires_at)
     consola.debug("Copilot token refreshed")
     if (state.showToken) {
       consola.info("Refreshed Copilot token:", token)
     }
     scheduleRefresh(refresh_in)
+    return
   } catch (error) {
     consola.error("Failed to refresh Copilot token:", error)
 
-    if (error instanceof HTTPError && error.response.status === 401) {
-      // Retry once before escalating — the Copilot token endpoint can 401
-      // transiently even when the GitHub token is still valid.
-      consola.warn("Got 401 from Copilot token endpoint, retrying once...")
-      try {
-        const { token, refresh_in, expires_at } = await getCopilotToken()
-        applyCopilotToken(token, expires_at)
-        consola.success("Copilot token refreshed on retry")
-        scheduleRefresh(refresh_in)
-        return
-      } catch {
-        // Retry failed — now check if the GitHub token itself is bad
-      }
-
+    if (!(error instanceof HTTPError && error.response.status === 401)) {
+      // Non-401 error (network issue, 5xx, etc.) — schedule retry with backoff
+      consecutiveFailures++
+      const retryDelay = getRetryDelay()
       consola.warn(
-        "Copilot token refresh returned 401, re-reading GitHub token from disk...",
+        `Transient error, will retry in ${retryDelay}s ` +
+          `(failure #${consecutiveFailures})`,
       )
-      try {
-        // Re-read the ghu_ token from disk — it may have been refreshed
-        // externally (e.g. via re-auth.cmd). No interactive auth needed.
-        const githubToken = await readGithubToken()
-        if (githubToken) {
-          // eslint-disable-next-line require-atomic-updates -- intentional overwrite with fresh disk value
-          state.githubToken = githubToken
-          consola.debug(
-            "GitHub token re-read from disk, retrying copilot token fetch",
-          )
-        }
-        const { token, refresh_in, expires_at } = await getCopilotToken()
-        applyCopilotToken(token, expires_at)
-        consola.success("Copilot token refreshed after re-reading GitHub token")
-        scheduleRefresh(refresh_in)
-      } catch (retryError) {
-        consola.error("Retry with disk token also failed:", retryError)
-        consola.warn(
-          "GitHub token may be invalid. Run re-auth.cmd manually to re-authenticate.",
-        )
-        // Retry in 120s so we don't give up permanently
-        scheduleRefresh(120)
-      }
-    } else {
-      consola.warn(
-        "Will retry on next refresh interval. Current token may still be valid.",
-      )
-      // Retry sooner on transient errors
-      scheduleRefresh(120)
+      scheduleRefresh(retryDelay)
+      return
     }
+  }
+
+  // Attempt 2: re-read GitHub token from disk (may have been refreshed externally)
+  consola.warn("All retries returned 401, re-reading GitHub token from disk...")
+  try {
+    const diskToken = await readGithubToken()
+    if (diskToken && diskToken !== state.githubToken) {
+      state.githubToken = diskToken
+      consola.debug("Found different GitHub token on disk, retrying")
+      const { token, refresh_in, expires_at } =
+        await fetchCopilotTokenWithRetry()
+      applyCopilotToken(token, expires_at)
+      consola.success("Copilot token refreshed with disk GitHub token")
+      scheduleRefresh(refresh_in)
+      return
+    } else {
+      consola.debug("Disk token is same as current token")
+    }
+  } catch (retryError) {
+    consola.error("Retry with disk token also failed:", retryError)
+  }
+
+  // Attempt 3: validate whether the GitHub token itself is still good
+  consola.warn("Validating GitHub token against /user endpoint...")
+  try {
+    const user = await getGitHubUser()
+    consola.info(
+      `GitHub token is still valid (user: ${user.login}). ` +
+        `Copilot endpoint may be temporarily unavailable.`,
+    )
+    // Token is valid but Copilot endpoint is rejecting — keep retrying
+    consecutiveFailures++
+    const retryDelay = getRetryDelay()
+    consola.warn(`Will retry in ${retryDelay}s (failure #${consecutiveFailures})`)
+    scheduleRefresh(retryDelay)
+  } catch {
+    // GitHub token itself is dead
+    consecutiveFailures++
+    const retryDelay = getRetryDelay()
+    consola.error(
+      "GitHub token is invalid. Please re-authenticate.\n" +
+        `  Run: re-auth.cmd\n` +
+        `  Will keep retrying every ${retryDelay}s in case token is refreshed externally.`,
+    )
+    // eslint-disable-next-line require-atomic-updates -- intentional clear of stale token
+    state.copilotToken = undefined
+    // eslint-disable-next-line require-atomic-updates -- intentional clear of stale expiry
+    state.copilotTokenExpiresAt = undefined
+    scheduleRefresh(retryDelay)
   }
 }
 
 /**
  * Called before each request to ensure the copilot token is still valid.
  * If the token is expired or about to expire (within 60s), refresh it on-demand.
+ * If no token exists at all (after a failure), force a refresh attempt.
  * Multiple concurrent callers share a single refresh attempt.
  */
 export async function ensureCopilotToken(force = false): Promise<void> {
-  if (!force) {
+  if (!force && state.copilotToken) {
     const now = Math.floor(Date.now() / 1000)
     const expiresAt = state.copilotTokenExpiresAt ?? 0
 
-    // Token still valid for at least 60s — nothing to do
-    if (state.copilotToken && expiresAt - now > 60) {
+    // Token still valid for at least 60s
+    if (expiresAt - now > 60) {
       return
     }
   }
 
-  consola.warn("Copilot token expired or expiring soon, refreshing on-demand")
+  consola.warn(
+    state.copilotToken
+      ? "Copilot token expired or expiring soon, refreshing on-demand"
+      : "No valid Copilot token, attempting refresh",
+  )
 
   // Coalesce concurrent refresh attempts into one
   if (!refreshPromise) {
@@ -134,13 +209,21 @@ export async function ensureCopilotToken(force = false): Promise<void> {
   }
 
   await refreshPromise
+
+  // After the refresh attempt, verify we actually have a valid token.
+  // If refreshCopilotToken failed and cleared the token, throw so the
+  // caller can return an error to the client instead of silently proceeding.
+  if (!state.copilotToken) {
+    throw new Error(
+      "Copilot token refresh failed. GitHub token may be invalid — re-authenticate.",
+    )
+  }
 }
 
 export const setupCopilotToken = async () => {
   const { token, refresh_in, expires_at } = await getCopilotToken()
   applyCopilotToken(token, expires_at)
 
-  // Display the Copilot token to the screen
   consola.debug("GitHub Copilot Token fetched successfully!")
   if (state.showToken) {
     consola.info("Copilot token:", token)
@@ -164,18 +247,26 @@ export async function setupGitHubToken(
       if (state.showToken) {
         consola.info("GitHub token:", githubToken)
       }
-      await logUser()
+
+      // Always validate the token on startup
+      try {
+        await logUser()
+      } catch {
+        consola.warn(
+          "Stored GitHub token failed validation, requesting new one",
+        )
+        // Fall through to device code flow
+        return await runDeviceCodeFlow()
+      }
 
       return
     }
 
     // When force=true, validate the existing token before starting device code flow.
-    // The Copilot token endpoint may return 401 transiently — that doesn't mean
-    // the GitHub token itself is invalid.
     if (githubToken && options?.force) {
       state.githubToken = githubToken
       try {
-        await logUser() // calls /user — validates the GitHub token
+        await logUser()
         consola.info("Existing GitHub token is still valid, reusing it")
         if (state.showToken) {
           consola.info("GitHub token:", githubToken)
@@ -189,22 +280,7 @@ export async function setupGitHubToken(
       }
     }
 
-    consola.info("Not logged in, getting new access token")
-    const response = await getDeviceCode()
-    consola.debug("Device code response:", response)
-
-    consola.info(
-      `Please enter the code "${response.user_code}" in ${response.verification_uri}`,
-    )
-
-    const token = await pollAccessToken(response)
-    await writeGithubToken(token)
-    state.githubToken = token
-
-    if (state.showToken) {
-      consola.info("GitHub token:", token)
-    }
-    await logUser()
+    await runDeviceCodeFlow()
   } catch (error) {
     if (error instanceof HTTPError) {
       consola.error("Failed to get GitHub token:", await error.response.json())
@@ -214,6 +290,25 @@ export async function setupGitHubToken(
     consola.error("Failed to get GitHub token:", error)
     throw error
   }
+}
+
+async function runDeviceCodeFlow(): Promise<void> {
+  consola.info("Not logged in, getting new access token")
+  const response = await getDeviceCode()
+  consola.debug("Device code response:", response)
+
+  consola.info(
+    `Please enter the code "${response.user_code}" in ${response.verification_uri}`,
+  )
+
+  const token = await pollAccessToken(response)
+  await writeGithubToken(token)
+  state.githubToken = token
+
+  if (state.showToken) {
+    consola.info("GitHub token:", token)
+  }
+  await logUser()
 }
 
 async function logUser() {
