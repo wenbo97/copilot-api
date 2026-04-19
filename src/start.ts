@@ -12,7 +12,7 @@ import { ensurePaths } from "./lib/paths"
 import { initProxyFromEnv } from "./lib/proxy"
 import { generateEnvScript } from "./lib/shell"
 import { state } from "./lib/state"
-import { setupCopilotToken, setupGitHubToken } from "./lib/token"
+import { setupCopilotToken, setupGitHubToken, tryVscodeProxyToken } from "./lib/token"
 import { ensureTraceFolder } from "./lib/trace"
 import { cacheModels, cacheVSCodeVersion } from "./lib/utils"
 import { server } from "./server"
@@ -32,6 +32,7 @@ interface RunServerOptions {
   traceFolder?: string
 }
 
+// eslint-disable-next-line max-lines-per-function -- startup orchestration is inherently sequential
 export async function runServer(options: RunServerOptions): Promise<void> {
   if (options.proxyEnv) {
     initProxyFromEnv()
@@ -68,14 +69,19 @@ export async function runServer(options: RunServerOptions): Promise<void> {
   await ensurePaths()
   await cacheVSCodeVersion()
 
-  if (options.githubToken) {
-    state.githubToken = options.githubToken
-    consola.info("Using provided GitHub token")
-  } else {
-    await setupGitHubToken()
-  }
+  // Try VS Code proxy first — skip GitHub auth entirely if it works
+  const proxyOk = await tryVscodeProxyToken()
+  if (!proxyOk) {
+    if (options.githubToken) {
+      // eslint-disable-next-line require-atomic-updates -- intentional assignment of provided token
+      state.githubToken = options.githubToken
+      consola.info("Using provided GitHub token")
+    } else {
+      await setupGitHubToken()
+    }
 
-  await setupCopilotToken()
+    await setupCopilotToken()
+  }
   await cacheModels()
 
   consola.info(

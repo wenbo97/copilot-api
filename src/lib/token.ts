@@ -105,6 +105,7 @@ async function fetchTokenFromVscodeProxy(): Promise<{
   token: string
   refresh_in: number
   expires_at: number
+  sku?: string
 } | null> {
   try {
     const response = await fetch(VSCODE_PROXY_TOKEN_URL, {
@@ -117,6 +118,7 @@ async function fetchTokenFromVscodeProxy(): Promise<{
       token: string
       refresh_in: number
       expires_at: number
+      sku?: string
     }
     if (data.token && data.expires_at) {
       return data
@@ -129,6 +131,27 @@ async function fetchTokenFromVscodeProxy(): Promise<{
 
 async function refreshCopilotToken(): Promise<void> {
   consola.debug("Refreshing Copilot token")
+
+  // If no GitHub token (proxy-only mode), skip straight to VS Code proxy
+  if (!state.githubToken) {
+    consola.debug("No GitHub token, trying VS Code proxy directly")
+    const proxyResult = await fetchTokenFromVscodeProxy()
+    if (proxyResult) {
+      applyCopilotToken(proxyResult.token, proxyResult.expires_at)
+      if (proxyResult.sku?.includes("enterprise")) {
+        // eslint-disable-next-line require-atomic-updates -- intentional update of account type
+        state.accountType = "enterprise"
+      }
+      consola.success("Copilot token refreshed from VS Code proxy")
+      scheduleRefresh(proxyResult.refresh_in)
+      return
+    }
+    consecutiveFailures++
+    const retryDelay = getRetryDelay()
+    consola.error(`VS Code proxy unavailable, will retry in ${retryDelay}s`)
+    scheduleRefresh(retryDelay)
+    return
+  }
 
   // Attempt 1: fetch with built-in retries using current GitHub token
   try {
@@ -144,7 +167,6 @@ async function refreshCopilotToken(): Promise<void> {
     consola.error("Failed to refresh Copilot token:", error)
 
     if (!(error instanceof HTTPError) || error.response.status !== 401) {
-      // Non-401 error (network issue, 5xx, etc.) — schedule retry with backoff
       consecutiveFailures++
       const retryDelay = getRetryDelay()
       consola.warn(
@@ -181,6 +203,10 @@ async function refreshCopilotToken(): Promise<void> {
   const proxyResult = await fetchTokenFromVscodeProxy()
   if (proxyResult) {
     applyCopilotToken(proxyResult.token, proxyResult.expires_at)
+    if (proxyResult.sku?.includes("enterprise")) {
+      // eslint-disable-next-line require-atomic-updates -- intentional update of account type
+      state.accountType = "enterprise"
+    }
     consola.success("Copilot token obtained from VS Code proxy")
     scheduleRefresh(proxyResult.refresh_in)
     return
@@ -195,7 +221,6 @@ async function refreshCopilotToken(): Promise<void> {
       `GitHub token is still valid (user: ${user.login}). `
         + `Copilot endpoint may be temporarily unavailable.`,
     )
-    // Token is valid but Copilot endpoint is rejecting — keep retrying
     consecutiveFailures++
     const retryDelay = getRetryDelay()
     consola.warn(
@@ -203,7 +228,6 @@ async function refreshCopilotToken(): Promise<void> {
     )
     scheduleRefresh(retryDelay)
   } catch {
-    // GitHub token itself is dead
     consecutiveFailures++
     const retryDelay = getRetryDelay()
     consola.error(
@@ -261,6 +285,24 @@ export async function ensureCopilotToken(force = false): Promise<void> {
   }
 }
 
+export async function tryVscodeProxyToken(): Promise<boolean> {
+  consola.debug("Trying VS Code proxy for initial token...")
+  const result = await fetchTokenFromVscodeProxy()
+  if (result) {
+    applyCopilotToken(result.token, result.expires_at)
+    if (result.sku?.includes("enterprise")) {
+      // eslint-disable-next-line require-atomic-updates -- intentional update of account type
+      state.accountType = "enterprise"
+      consola.info("Detected enterprise account from VS Code proxy")
+    }
+    consola.success("Copilot token obtained from VS Code proxy (skipping GitHub auth)")
+    scheduleRefresh(result.refresh_in)
+    return true
+  }
+  consola.debug("VS Code proxy not available, falling back to normal auth")
+  return false
+}
+
 export const setupCopilotToken = async () => {
   try {
     const { token, refresh_in, expires_at } = await getCopilotToken()
@@ -279,6 +321,10 @@ export const setupCopilotToken = async () => {
     const proxyResult = await fetchTokenFromVscodeProxy()
     if (proxyResult) {
       applyCopilotToken(proxyResult.token, proxyResult.expires_at)
+      if (proxyResult.sku?.includes("enterprise")) {
+        // eslint-disable-next-line require-atomic-updates -- intentional update of account type
+        state.accountType = "enterprise"
+      }
       consola.success("Copilot token obtained from VS Code proxy")
       scheduleRefresh(proxyResult.refresh_in)
       return
