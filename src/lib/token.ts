@@ -90,8 +90,8 @@ async function fetchCopilotTokenWithRetry(): Promise<{
         // Short delay between retries (1s, 2s) for transient issues
         const retryMs = attempt * 1000
         consola.warn(
-          `Copilot token fetch attempt ${attempt}/${maxAttempts} failed` +
-            `${is401 ? " (401)" : ""}, retrying in ${retryMs}ms...`,
+          `Copilot token fetch attempt ${attempt}/${maxAttempts} failed`
+            + `${is401 ? " (401)" : ""}, retrying in ${retryMs}ms...`,
         )
         await sleep(retryMs)
       }
@@ -143,13 +143,13 @@ async function refreshCopilotToken(): Promise<void> {
   } catch (error) {
     consola.error("Failed to refresh Copilot token:", error)
 
-    if (!(error instanceof HTTPError && error.response.status === 401)) {
+    if (!(error instanceof HTTPError) || error.response.status !== 401) {
       // Non-401 error (network issue, 5xx, etc.) — schedule retry with backoff
       consecutiveFailures++
       const retryDelay = getRetryDelay()
       consola.warn(
-        `Transient error, will retry in ${retryDelay}s ` +
-          `(failure #${consecutiveFailures})`,
+        `Transient error, will retry in ${retryDelay}s `
+          + `(failure #${consecutiveFailures})`,
       )
       scheduleRefresh(retryDelay)
       return
@@ -192,22 +192,24 @@ async function refreshCopilotToken(): Promise<void> {
   try {
     const user = await getGitHubUser()
     consola.info(
-      `GitHub token is still valid (user: ${user.login}). ` +
-        `Copilot endpoint may be temporarily unavailable.`,
+      `GitHub token is still valid (user: ${user.login}). `
+        + `Copilot endpoint may be temporarily unavailable.`,
     )
     // Token is valid but Copilot endpoint is rejecting — keep retrying
     consecutiveFailures++
     const retryDelay = getRetryDelay()
-    consola.warn(`Will retry in ${retryDelay}s (failure #${consecutiveFailures})`)
+    consola.warn(
+      `Will retry in ${retryDelay}s (failure #${consecutiveFailures})`,
+    )
     scheduleRefresh(retryDelay)
   } catch {
     // GitHub token itself is dead
     consecutiveFailures++
     const retryDelay = getRetryDelay()
     consola.error(
-      "GitHub token is invalid. Please re-authenticate.\n" +
-        `  Run: re-auth.cmd\n` +
-        `  Will keep retrying every ${retryDelay}s in case token is refreshed externally.`,
+      "GitHub token is invalid. Please re-authenticate.\n"
+        + `  Run: re-auth.cmd\n`
+        + `  Will keep retrying every ${retryDelay}s in case token is refreshed externally.`,
     )
     // eslint-disable-next-line require-atomic-updates -- intentional clear of stale token
     state.copilotToken = undefined
@@ -235,9 +237,9 @@ export async function ensureCopilotToken(force = false): Promise<void> {
   }
 
   consola.warn(
-    state.copilotToken
-      ? "Copilot token expired or expiring soon, refreshing on-demand"
-      : "No valid Copilot token, attempting refresh",
+    state.copilotToken ?
+      "Copilot token expired or expiring soon, refreshing on-demand"
+    : "No valid Copilot token, attempting refresh",
   )
 
   // Coalesce concurrent refresh attempts into one
@@ -271,7 +273,9 @@ export const setupCopilotToken = async () => {
 
     scheduleRefresh(refresh_in)
   } catch (error) {
-    consola.warn("Failed to fetch Copilot token normally, trying VS Code proxy...")
+    consola.warn(
+      "Failed to fetch Copilot token normally, trying VS Code proxy...",
+    )
     const proxyResult = await fetchTokenFromVscodeProxy()
     if (proxyResult) {
       applyCopilotToken(proxyResult.token, proxyResult.expires_at)
@@ -307,7 +311,8 @@ export async function setupGitHubToken(
           "Stored GitHub token failed validation, requesting new one",
         )
         // Fall through to device code flow
-        return await runDeviceCodeFlow()
+        await runDeviceCodeFlow()
+        return
       }
 
       return
