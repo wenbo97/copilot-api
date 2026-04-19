@@ -11,6 +11,8 @@ import { HTTPError } from "./error"
 import { state } from "./state"
 import { sleep } from "./utils"
 
+const VSCODE_PROXY_TOKEN_URL = "http://127.0.0.1:3774/token"
+
 const readGithubToken = () => fs.readFile(PATHS.GITHUB_TOKEN_PATH, "utf8")
 
 const writeGithubToken = (token: string) =>
@@ -99,6 +101,32 @@ async function fetchCopilotTokenWithRetry(): Promise<{
   throw lastError
 }
 
+async function fetchTokenFromVscodeProxy(): Promise<{
+  token: string
+  refresh_in: number
+  expires_at: number
+} | null> {
+  try {
+    const response = await fetch(VSCODE_PROXY_TOKEN_URL, {
+      signal: AbortSignal.timeout(3000),
+    })
+    if (!response.ok) {
+      return null
+    }
+    const data = (await response.json()) as {
+      token: string
+      refresh_in: number
+      expires_at: number
+    }
+    if (data.token && data.expires_at) {
+      return data
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
 async function refreshCopilotToken(): Promise<void> {
   consola.debug("Refreshing Copilot token")
 
@@ -148,7 +176,18 @@ async function refreshCopilotToken(): Promise<void> {
     consola.error("Retry with disk token also failed:", retryError)
   }
 
-  // Attempt 3: validate whether the GitHub token itself is still good
+  // Attempt 3: try VS Code proxy (if VS Code extension is running)
+  consola.warn("Trying VS Code proxy for token...")
+  const proxyResult = await fetchTokenFromVscodeProxy()
+  if (proxyResult) {
+    applyCopilotToken(proxyResult.token, proxyResult.expires_at)
+    consola.success("Copilot token obtained from VS Code proxy")
+    scheduleRefresh(proxyResult.refresh_in)
+    return
+  }
+  consola.debug("VS Code proxy not available or returned no token")
+
+  // Attempt 4: validate whether the GitHub token itself is still good
   consola.warn("Validating GitHub token against /user endpoint...")
   try {
     const user = await getGitHubUser()
@@ -221,15 +260,27 @@ export async function ensureCopilotToken(force = false): Promise<void> {
 }
 
 export const setupCopilotToken = async () => {
-  const { token, refresh_in, expires_at } = await getCopilotToken()
-  applyCopilotToken(token, expires_at)
+  try {
+    const { token, refresh_in, expires_at } = await getCopilotToken()
+    applyCopilotToken(token, expires_at)
 
-  consola.debug("GitHub Copilot Token fetched successfully!")
-  if (state.showToken) {
-    consola.info("Copilot token:", token)
+    consola.debug("GitHub Copilot Token fetched successfully!")
+    if (state.showToken) {
+      consola.info("Copilot token:", token)
+    }
+
+    scheduleRefresh(refresh_in)
+  } catch (error) {
+    consola.warn("Failed to fetch Copilot token normally, trying VS Code proxy...")
+    const proxyResult = await fetchTokenFromVscodeProxy()
+    if (proxyResult) {
+      applyCopilotToken(proxyResult.token, proxyResult.expires_at)
+      consola.success("Copilot token obtained from VS Code proxy")
+      scheduleRefresh(proxyResult.refresh_in)
+      return
+    }
+    throw error
   }
-
-  scheduleRefresh(refresh_in)
 }
 
 interface SetupGitHubTokenOptions {
