@@ -12,7 +12,11 @@ import { ensurePaths } from "./lib/paths"
 import { initProxyFromEnv } from "./lib/proxy"
 import { generateEnvScript } from "./lib/shell"
 import { state } from "./lib/state"
-import { setupCopilotToken, setupGitHubToken, tryVscodeProxyToken } from "./lib/token"
+import {
+  setupCopilotToken,
+  setupGitHubToken,
+  tryVscodeProxyToken,
+} from "./lib/token"
 import { ensureTraceFolder } from "./lib/trace"
 import { cacheModels, cacheVSCodeVersion } from "./lib/utils"
 import { server } from "./server"

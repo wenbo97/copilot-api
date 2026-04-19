@@ -291,11 +291,12 @@ export async function tryVscodeProxyToken(): Promise<boolean> {
   if (result) {
     applyCopilotToken(result.token, result.expires_at)
     if (result.sku?.includes("enterprise")) {
-      // eslint-disable-next-line require-atomic-updates -- intentional update of account type
       state.accountType = "enterprise"
       consola.info("Detected enterprise account from VS Code proxy")
     }
-    consola.success("Copilot token obtained from VS Code proxy (skipping GitHub auth)")
+    consola.success(
+      "Copilot token obtained from VS Code proxy (skipping GitHub auth)",
+    )
     scheduleRefresh(result.refresh_in)
     return true
   }
